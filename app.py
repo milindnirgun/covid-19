@@ -60,6 +60,14 @@ def getDataDict():
     | hospitalizedCumulative | Total no. of people who have gone to the hospital for COVID-19 so far, including those who have since recovered or died |
     '''
 
+# Write Acknowledgements
+def acknowledge():
+    st.markdown('''The data sources for this project are provided by:  
+        [The COVID Tracking Project](https://covidtracking.com/about-data/license).\
+             This source publishes data under a [Creative Commons CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) license.  
+        [New York Times](https://github.com/nytimes/covid-19-data) maintains and shares a repository of Covid-19 related data under
+        their own free [license](https://github.com/nytimes/covid-19-data/blob/master/LICENSE)         
+    ''')
 # Draw an area chart using Altair
 def createAreaChart(df):
     area1 = alt.Chart(df).mark_area(opacity=0.3).encode(
@@ -139,21 +147,48 @@ def createPositiveBarChart(df):
     fig.update(layout=dict(title=dict(x=0.5), autosize=True))
     return fig
 
-# Create an Altair bar chart to show increments in positive cases over a weekly period
-def createIncrementalBarChart(df):
+# Create an Altair bar chart to show daily changes over a weekly period
+# df - DataFrame to be used for the plot
+# field - variable to plot on the Y axis
+def createIncrementalBarChart(df, field):
+    if (field == 'positive'):
+        chartTitle = "Confirmed Cases"
+    else:
+        chartTitle = "Reported Deaths"
+
+    axisTitle = "Daily Change"
+
     bar = alt.Chart(df).mark_bar(opacity=0.6).encode(
                 x = alt.X("date:T", axis=alt.Axis(title='Date')),
-                y = alt.Y("positive:Q", stack=None, axis=alt.Axis(title='Daily Change in confirmed Cases'))
+                y = alt.Y(field + ":Q", stack=None, axis=alt.Axis(title=axisTitle))
             ).properties(
-                width=800,
-                height=600
+                width=640,
+                height=480
             )
     line = alt.Chart(df).mark_line().encode(
             alt.X("date:T"),
             alt.Y("EMA:Q"),
             color=alt.value('red')
     )
-    return (bar + line)
+    layer = alt.layer(bar, line
+            ).properties(
+                title=chartTitle
+            ).configure_title(
+                fontSize=20,
+                align='center',
+                color='gray'  
+            ).configure_axis(
+                grid=False,
+                titleFontSize=14
+            )
+    chart = bar + line
+    # TODO - the configuration below does not seem to have any effect - fix
+    chart.configure_title(
+        fontSize=20,
+        anchor='start',
+        color='gray'  
+    )
+    return (layer)
 
 # Create a Chloropeth map of USA with States showing positive cases colored by death count
 #TODO: add state code to be displayed for state using a centroid
@@ -238,6 +273,31 @@ def getConfirmedDeaths(day):
     deaths = us_df.loc[us_df['date'] == searchDate, 'death']
     return deaths.astype(int)
 
+# Calculate daily changes in confirmed cases with a given EMA in weeks
+def getChangeConfCases(ema):
+    d_df = daily_df.groupby("date")
+    s1 = d_df['positive'].sum()    # gets a Series
+    p_df = pd.DataFrame(s1.diff())    # gets the difference in values from previous day and create a dataframe
+    p_df['EMA'] = p_df.ewm(span=ema*7, adjust=False).mean()  # calculate Exponential Moving Average 
+    p_df = p_df[2:]   # Remove first two elements (Nan)
+    p_df.reset_index(inplace=True)
+
+    return p_df
+
+# Calculate daily changes in deaths with a given EMA in weeks
+def getChangeDeaths(ema):
+    d_df = daily_df.groupby("date")
+    s2 = d_df['death'].sum()    # gets a Series
+    s_df = pd.DataFrame(s2.diff())    # gets the difference in values from previous day and create a dataframe
+    s_df['EMA'] = s_df.ewm(span=ema*7, adjust=False).mean()  # calculate Exponential Moving Average
+
+    s_df = s_df[2:]   # Remove first two elements (Nan)
+    s_df.reset_index(inplace=True)
+
+    return s_df
+
+
+
 ###################################
 # Start main program
 ###################################
@@ -257,14 +317,23 @@ daily_df = getDailyData(states_df)
 # Get a normalized version of daily_df which is calculates values per 100K 
 normalizedDaily_df = getNormalizedData(daily_df)
 
-# Get daily differential from all states daily data (STATES_DATA_FILE)
-d_df = daily_df.groupby("date")
-s = d_df['positive'].sum()    # gets a Series
-d = pd.DataFrame(s.diff())    # gets the difference in values from previous day and create a dataframe
-d['EMA'] = d.ewm(span=30, adjust=False).mean()  
+# Get daily change in positive cases from all states daily data (STATES_DATA_FILE)
+p_df = daily_df.groupby("date")
+s1 = p_df['positive'].sum()    # gets a Series
+p_df = pd.DataFrame(s1.diff())    # gets the difference in values from previous day and create a dataframe
+p_df['EMA'] = p_df.ewm(span=7, adjust=False).mean()  # calculate Exponential Moving Average for 7 days
 
-d = d[2:]   # Remove first two elements (Nan)
-d.reset_index(inplace=True)
+p_df = p_df[2:]   # Remove first two elements (Nan)
+p_df.reset_index(inplace=True)
+
+# Get daily change in deaths from all states daily data (STATES_DATA_FILE)
+d_df = daily_df.groupby("date")
+s2 = d_df['death'].sum()    # gets a Series
+s_df = pd.DataFrame(s2.diff())    # gets the difference in values from previous day and create a dataframe
+s_df['EMA'] = s_df.ewm(span=7, adjust=False).mean()  # calculate Exponential Moving Average for 7 days
+
+s_df = s_df[2:]   # Remove first two elements (Nan)
+s_df.reset_index(inplace=True)
 
 ##############################
 
@@ -293,7 +362,7 @@ options_list = [
     'Hospitalized & Death Counts',
     'Confirmed Cases by State',
     'Cummulative Count of Positive Cases',
-    'Daily Change in # of Positive Cases',
+    'Daily Changes in Confirmed and Deaths',
 ]
 option = st.sidebar.selectbox(
     'Select a chart type below',
@@ -326,10 +395,19 @@ if (options_list.index(option) == 2):
 
 # Percentage Change by Month
 if (options_list.index(option) == 3):
-    
-    bChart = createIncrementalBarChart(d)
-    st.altair_chart(bChart)
+    ema = st.sidebar.slider('Exponential Moving Average in Weeks', 1, 4)
+    p_df = getChangeConfCases(ema)
+    s_df = getChangeDeaths(ema)
+
+    # Plot daily change in confirmed cases
+    pChart = createIncrementalBarChart(p_df, 'positive')
+    st.altair_chart(pChart)
+    # Plot daily change in deaths
+    dChart = createIncrementalBarChart(s_df, 'death')
+    st.altair_chart(dChart)
+
     st.markdown("The red line shows the exponential moving average over 30 days")
     if (st.checkbox('Display raw data')):
-        st.write(us_df)
+        st.write(s_df)
 
+acknowledge()
